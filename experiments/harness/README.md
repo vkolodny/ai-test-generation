@@ -9,15 +9,15 @@ import is involved.
 The plan is labeled `synthetic_replay_input`; it does not represent an actual
 human approval. The replay writes the generated Java test into a fresh copy of
 the supplied fixture and records input, fixture-tree, model-response, and test
-content digests. It rejects paths outside `src/test/java`, stale fixture
-identity, weak assertions, and reuse of an output directory. The `execute`
+content digests. It rejects paths outside `src/test/java`, mismatched fixture
+metadata, weak assertions, and reuse of an output directory. The `execute`
 stage remains `not_run` in the deterministic record. The native Maven result is
 recorded separately because replay-test success is not application-test
 execution evidence.
 
 ## Inputs
 
-- ATG source snapshot: `6d6d63b3e5c924e37ca68b263bc1b6248b3755bc`.
+- ATG base snapshot: `6d6d63b3e5c924e37ca68b263bc1b6248b3755bc`.
 - Java fixture: `project-lightpath/java-analysis-adapter` at
   `2aac181ae63d938c118bac133d33fb8ae19eeec9`.
 - Fixture versions: Java 21, Quarkus 3.40.1, Maven 3.9.11.
@@ -67,3 +67,62 @@ Only `experiments/harness/` and `tests/replay/` are in scope. This slice does
 not add a provider SDK, call a real model, implement human checkpoints, modify
 the Quarkus source repository, or prove a CVE fix. Candidate-harness comparison
 and approved-endpoint evaluation remain follow-up work for FLPATH-5050.
+
+## Candidate-neutral foundation check
+
+For FLPATH-5050, give each candidate agent the exact text in
+`fixtures/blank-user-objective.md`, then pass its new Java test file to the
+evaluator. Keep the candidate outside this ATG repository so it cannot read
+the reference test or mutation. Record the SHA-256 of that objective in the
+invocation JSON. The evaluator does not call the
+agent or model. It verifies the fixture's actual source-tree digest, installs
+the submitted test in two disposable copies, and runs only that test class:
+
+1. The unchanged Java 21/Quarkus fixture must pass.
+2. A one-line mutation in `UserAuthPublicKey.doAuth` makes blank users pass
+   authentication. The candidate test must fail with an assertion on this copy.
+
+This is one known behavior check, not a CVE fix claim. A result is
+`discriminates` only when both observations hold. Missing tests, compilation
+errors, setup errors, and timeouts remain blocked or inconclusive. The output
+JSON records candidate, tool/model/endpoint labels, test hash, verified fixture
+hash, container image identity, exact Maven commands, exit codes, test counts,
+logs, and limitations. It contains no API key.
+
+Run on a host with Podman, the pinned Java fixture, and a warmed Maven cache:
+
+```sh
+python3 experiments/harness/candidate_evaluation.py \
+  --candidate-test-file /path/to/TransferBlankUserTest.java \
+  --candidate-test-path src/test/java/com/projectlightpath/fixture/TransferBlankUserTest.java \
+  --candidate aider \
+  --tool-version 0.86.2 \
+  --model-id approved-model-id \
+  --endpoint-id approved-endpoint-label \
+  --invocation-record /path/to/redacted-invocation.json \
+  --fixture-root /path/to/java-analysis-adapter/spike/java21-quarkus \
+  --maven-cache /path/to/offline-maven-repository \
+  --output-root /path/to/new-evaluation-output
+```
+
+The invocation JSON supplies the same candidate/tool/model/endpoint labels, a
+redacted command argument list, prompt and configuration SHA-256 digests, and
+optionally the candidate tool source revision. Keep the prompt and sanitized
+configuration alongside the run for reproduction; never put credentials in the
+record. A manually written control example uses
+`fixtures/reference-invocation.json` with `model_id: none`. Use a fresh output
+path per candidate. The Maven runs use
+the pinned Java 21 image with network disabled, a read-only Maven cache,
+2 CPUs, 2 GiB memory, 256 processes, and a 128 MiB per-file limit. The
+writable workspace has no total disk quota; run tests from real agents only on
+a disposable host or volume with a disk quota. Surefire XML is writable by
+the candidate test, so treat this result as a review signal.
+Results for different candidates are comparable only when they use the same
+objective, fixture digest, mutation, and evaluation command.
+
+
+The manual reference test in `fixtures/TransferBlankUserTest.java` passed the
+unchanged fixture and failed with an assertion on the mutation in two fresh
+network-disabled runs. The final example report is
+`results/reference-blank-user-evaluation.json`. It is a control case, not
+evidence that Aider, Claude Code, or a model produced this test.

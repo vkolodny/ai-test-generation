@@ -4,7 +4,7 @@
   "run_id": "flpath-5050-quarkus-transfer-001",
   "source": {
     "atg_repository": "https://github.com/project-lightpath/ai-test-generation",
-    "atg_revision": "6d6d63b3e5c924e37ca68b263bc1b6248b3755bc",
+    "atg_base_revision": "6d6d63b3e5c924e37ca68b263bc1b6248b3755bc",
     "fixture_repository": "https://github.com/project-lightpath/java-analysis-adapter",
     "fixture_revision": "2aac181ae63d938c118bac133d33fb8ae19eeec9",
     "fixture_tree_digest": "sha256:5e19aa18e2019ecf9fe2559648002bac97467da685f5ef3fb4eefa0251080efe"
