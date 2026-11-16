@@ -18,6 +18,15 @@ Pinned Java fixture + shared task
   → evaluation record + human comparison by layer
 ```
 
+## Repository file map
+
+- **Architecture and usage:** This document; [experiment README](../../experiments/harness/README.md).
+- **Evaluators:** [candidate evaluator](../../experiments/harness/candidate_evaluation.py); [deterministic fake-model replay](../../experiments/harness/fake_model_replay.py).
+- **Shared candidate task and control:** [blank-user objective](../../experiments/harness/fixtures/blank-user-objective.md); [manual reference Java test](../../experiments/harness/fixtures/TransferBlankUserTest.java); [reference invocation record](../../experiments/harness/fixtures/reference-invocation.json).
+- **Earlier replay inputs:** [transfer objective](../../experiments/harness/fixtures/transfer-objective.json); [recorded Java test response](../../experiments/harness/fixtures/TransferGeneratedReplayTest.java).
+- **Automated checks:** [candidate evaluator tests](../../tests/replay/test_candidate_evaluation.py); [fake-model replay tests](../../tests/replay/test_fake_model_replay.py); [test package marker](../../tests/replay/__init__.py).
+- **Recorded results:** [blank-user reference evaluation](../../experiments/harness/results/reference-blank-user-evaluation.json); [fake-model replay record](../../experiments/harness/results/fake-model-replay.json); [Java/Quarkus execution record](../../experiments/harness/results/quarkus-transfer-execution.json).
+
 ## Common technical experiment
 
 1. Give each candidate the exact [blank-user objective](../../experiments/harness/fixtures/blank-user-objective.md) and the same pinned Java 21/Quarkus fixture. Keep the reference test and mutation out of the candidate's input.
