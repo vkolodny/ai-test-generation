@@ -137,8 +137,11 @@ def _remove_container(cid_file: Path) -> None:
                        stderr=subprocess.DEVNULL, timeout=30)
 
 
-def run_case(root: Path, label: str, class_name: str, cache: Path, image: str) -> Dict[str, object]:
-    cid_file = root.parent / (label + ".cid")
+def _run_maven_phase(root: Path, label: str, phase: str, cache: Path,
+                     image: str, class_name: str) -> Dict[str, object]:
+    cid_file = root.parent / (label + "-" + phase + ".cid")
+    goal = (["-DskipTests", "package"] if phase == "package" else
+            ["-Dtest=" + class_name, "-Dsurefire.failIfNoSpecifiedTests=true", "test"])
     command = [
         "podman", "run", "--rm", "--cidfile", str(cid_file), "--pull=never",
         "--network=none", "--cap-drop=all", "--security-opt=no-new-privileges",
@@ -147,24 +150,36 @@ def run_case(root: Path, label: str, class_name: str, cache: Path, image: str) -
         "-e", "JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2",
         "-v", str(root) + ":/workspace:Z",
         "-v", str(cache) + ":/root/.m2/repository:ro,Z",
-        "-w", "/workspace", image,
-        "mvn", "-o", "-B", "-ntp", "-Ptest",
-        "-Dtest=" + class_name, "-Dsurefire.failIfNoSpecifiedTests=true", "test",
-    ]
-    log = root.parent / (label + ".log")
+        "-w", "/workspace", image, "mvn", "-o", "-B", "-ntp", "-Ptest",
+    ] + goal
+    log = root.parent / (label + "-" + phase + ".log")
     try:
         with log.open("wb") as output:
             result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT,
                                     timeout=900, preexec_fn=_limit_log_file,
                                     start_new_session=True)
     except subprocess.TimeoutExpired:
-        return {"status": "blocked_timeout", "exit_code": None, "tests": {},
-                "log": str(log), "command": command}
+        return {"status": "timeout", "exit_code": None, "log": str(log), "command": command}
     finally:
         _remove_container(cid_file)
-    if log.stat().st_size >= MAX_LOG_BYTES:
-        return {"status": "blocked_output_limit", "exit_code": result.returncode,
-                "tests": {}, "log": str(log), "command": command}
+    status = ("output_limit" if log.stat().st_size >= MAX_LOG_BYTES else
+              "passed" if result.returncode == 0 else "failed")
+    return {"status": status, "exit_code": result.returncode,
+            "log": str(log), "command": command}
+
+
+def run_case(root: Path, label: str, class_name: str, cache: Path, image: str) -> Dict[str, object]:
+    package = _run_maven_phase(root, label, "package", cache, image, class_name)
+    if package["status"] != "passed":
+        reason = "failure" if package["status"] == "failed" else package["status"]
+        return {"status": "blocked_package_" + reason, "exit_code": package["exit_code"],
+                "tests": {}, "log": package["log"], "command": package["command"],
+                "package": package, "test": None}
+    test = _run_maven_phase(root, label, "test", cache, image, class_name)
+    if test["status"] in ("timeout", "output_limit"):
+        return {"status": "blocked_" + test["status"], "exit_code": test["exit_code"],
+                "tests": {}, "log": test["log"], "command": test["command"],
+                "package": package, "test": test}
     counts = surefire_result(root, class_name)
     if counts["tests"] == 0:
         status = "blocked_no_tests"
@@ -173,15 +188,16 @@ def run_case(root: Path, label: str, class_name: str, cache: Path, image: str) -
     elif counts["errors"] > 0:
         status = "blocked_test_error"
     elif counts["failures"] > 0:
-        status = ("failed_assertion" if result.returncode != 0
+        status = ("failed_assertion" if test["exit_code"] != 0
                   and counts["assertion_failures"] == counts["failures"]
                   else "blocked_test_failure")
-    elif result.returncode != 0:
+    elif test["exit_code"] != 0:
         status = "blocked_runner_failure"
     else:
         status = "passed"
-    return {"status": status, "exit_code": result.returncode, "tests": counts,
-            "log": str(log), "command": command}
+    return {"status": status, "exit_code": test["exit_code"], "tests": counts,
+            "log": test["log"], "command": test["command"],
+            "package": package, "test": test}
 
 
 def verify_inputs(args: argparse.Namespace, target: Path) -> str:
@@ -236,6 +252,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, object]:
         "mutation": {"path": str(MUTATION_PATH), "old": ORIGINAL_LINE,
                      "new": MUTATED_LINE, "mutated_source_sha256": mutation_digest},
         "environment": {"image": args.image, "image_id": image,
+                        "execution_contract": "offline-package-then-candidate-test",
                         "network": "disabled", "maven_cache": "offline-read-only",
                         "memory_limit": "2g", "cpu_limit": 2, "file_size_limit_bytes": 134217728},
         "result": status, "cases": results,

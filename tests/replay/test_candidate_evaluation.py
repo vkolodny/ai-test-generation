@@ -57,22 +57,42 @@ class CandidateEvaluationTests(unittest.TestCase):
             evaluation.mutate_fixture(self.case)
 
     def test_compile_failure_does_not_count_as_behavioral_detection(self):
-        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(1)):
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(1)]):
             result = evaluation.run_case(self.case, "baseline", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_no_tests")
         self.assertEqual(result["tests"]["tests"], 0)
 
+    def test_package_failure_blocks_without_running_candidate(self) -> None:
+        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(1)) as runner:
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
+        self.assertEqual(result["status"], "blocked_package_failure")
+        self.assertIsNone(result["test"])
+        self.assertEqual(runner.call_count, 1)
+
+    def test_package_first_command_is_the_same_for_every_candidate(self) -> None:
+        self.write_report("com.projectlightpath.fixture.CandidateTest", 1)
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(0)]):
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["package"]["command"][-2:], ["-DskipTests", "package"])
+        self.assertEqual(result["test"]["command"][-3:],
+                         ["-Dtest=CandidateTest", "-Dsurefire.failIfNoSpecifiedTests=true", "test"])
+        for phase in ("package", "test"):
+            self.assertIn("--network=none", result[phase]["command"])
+
     def test_skipped_candidate_is_not_a_pass(self):
         self.write_report("com.projectlightpath.fixture.CandidateTest", 1, skipped=1)
-        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(0)):
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(0)]):
             result = evaluation.run_case(self.case, "baseline", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_no_executed_tests")
 
     def test_matching_test_assertion_failure_counts(self):
         self.write_report("com.projectlightpath.fixture.CandidateTest", 1, failures=1)
-        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(1)):
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(1)]):
             result = evaluation.run_case(self.case, "mutant", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "failed_assertion")
@@ -80,7 +100,7 @@ class CandidateEvaluationTests(unittest.TestCase):
 
     def test_existing_test_failure_cannot_substitute_for_candidate(self):
         self.write_report("com.projectlightpath.fixture.TransferResourceTest", 1, failures=1)
-        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(1)):
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(1)]):
             result = evaluation.run_case(self.case, "mutant", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_no_tests")
@@ -136,19 +156,33 @@ class CandidateEvaluationTests(unittest.TestCase):
 
     def test_xml_failure_with_success_exit_is_inconclusive(self):
         self.write_report("com.projectlightpath.fixture.CandidateTest", 1, failures=1)
-        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(0)):
+        with patch.object(evaluation.subprocess, "run", side_effect=[self.fake_run(0), self.fake_run(0)]):
             result = evaluation.run_case(self.case, "mutant", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_test_failure")
 
     def test_timeout_removes_started_container(self):
-        cid_file = self.root / "baseline.cid"
+        cid_file = self.root / "baseline-package.cid"
         cid_file.write_text("test-container-id")
         timeout = evaluation.subprocess.TimeoutExpired(cmd="podman", timeout=900)
         with patch.object(evaluation.subprocess, "run", side_effect=[timeout, self.fake_run(0)]) as runner:
             result = evaluation.run_case(self.case, "baseline", "CandidateTest",
                                          self.cache, "pinned-image")
+        self.assertEqual(result["status"], "blocked_package_timeout")
+        self.assertEqual(runner.call_args_list[-1].args[0],
+                         ["podman", "rm", "-f", "test-container-id"])
+
+    def test_test_phase_timeout_keeps_package_evidence(self) -> None:
+        cid_file = self.root / "baseline-test.cid"
+        cid_file.write_text("test-container-id")
+        timeout = evaluation.subprocess.TimeoutExpired(cmd="podman", timeout=900)
+        with patch.object(evaluation.subprocess, "run", side_effect=[
+                self.fake_run(0), timeout, self.fake_run(0)]) as runner:
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_timeout")
+        self.assertEqual(result["package"]["status"], "passed")
+        self.assertEqual(result["test"]["status"], "timeout")
         self.assertEqual(runner.call_args_list[-1].args[0],
                          ["podman", "rm", "-f", "test-container-id"])
 
