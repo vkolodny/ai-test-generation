@@ -140,3 +140,9 @@ assertion on the mutated copy. This is one behavior check, not a provider
 selection. The older `results/reference-blank-user-evaluation.json` and
 pre-contract Aider/Pydantic AI trials used the previous objective or
 `mvn test`-only command; keep those as historical evidence.
+
+The [2026-11-18 four-candidate rerun](results/enmaas-devshift-glm53-2026-11-18/README.md)
+uses the current EnMaaS gateway and one GLM 5.3 model for Aider, Pydantic AI,
+Claude Code, and a LangGraph adapter. All four generated tests discriminated the
+same seeded defect; the result note records setup failures, adapter changes,
+and the limits of this single-task comparison.
