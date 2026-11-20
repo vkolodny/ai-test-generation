@@ -81,7 +81,11 @@ class CandidateEvaluationTests(unittest.TestCase):
         self.assertEqual(result["test"]["command"][-3:],
                          ["-Dtest=CandidateTest", "-Dsurefire.failIfNoSpecifiedTests=true", "test"])
         for phase in ("package", "test"):
-            self.assertIn("--network=none", result[phase]["command"])
+            command = result[phase]["command"]
+            self.assertIn("--network=none", command)
+            self.assertIn("--read-only", command)
+            self.assertEqual(command[command.index("--tmpfs") + 1],
+                             "/tmp:rw,nosuid,nodev,size=256m,mode=1777")
 
     def test_skipped_candidate_is_not_a_pass(self):
         self.write_report("com.projectlightpath.fixture.CandidateTest", 1, skipped=1)
@@ -104,6 +108,45 @@ class CandidateEvaluationTests(unittest.TestCase):
             result = evaluation.run_case(self.case, "mutant", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_no_tests")
+
+    def test_linked_surefire_directory_is_blocked(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "TEST-CandidateTest.xml").write_text(
+            "<testsuite name=\"CandidateTest\" tests=\"1\" failures=\"0\"/>")
+        target = self.case / "target"
+        target.mkdir()
+        (target / "surefire-reports").symlink_to(outside, target_is_directory=True)
+        with patch.object(evaluation.subprocess, "run", side_effect=[
+                self.fake_run(0), self.fake_run(0)]):
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
+        self.assertEqual(result["status"], "blocked_report_invalid")
+        self.assertEqual(result["tests"]["report_status"], "linked")
+
+    def test_linked_surefire_xml_is_blocked(self):
+        outside = self.root / "outside.xml"
+        outside.write_text("<testsuite name=\"CandidateTest\" tests=\"1\"/>")
+        directory = self.case / "target/surefire-reports"
+        directory.mkdir(parents=True)
+        (directory / "TEST-CandidateTest.xml").symlink_to(outside)
+        with patch.object(evaluation.subprocess, "run", side_effect=[
+                self.fake_run(0), self.fake_run(0)]):
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
+        self.assertEqual(result["status"], "blocked_report_invalid")
+        self.assertEqual(result["tests"]["report_status"], "invalid")
+
+    def test_malformed_surefire_xml_is_blocked(self):
+        directory = self.case / "target/surefire-reports"
+        directory.mkdir(parents=True)
+        (directory / "TEST-CandidateTest.xml").write_text("<broken")
+        with patch.object(evaluation.subprocess, "run", side_effect=[
+                self.fake_run(0), self.fake_run(0)]):
+            result = evaluation.run_case(self.case, "baseline", "CandidateTest",
+                                         self.cache, "pinned-image")
+        self.assertEqual(result["status"], "blocked_report_invalid")
+        self.assertEqual(result["tests"]["report_status"], "invalid")
 
     def test_real_model_invocation_requires_prompt_and_config_hashes(self):
         invocation = self.root / "invocation.json"
@@ -169,7 +212,7 @@ class CandidateEvaluationTests(unittest.TestCase):
             result = evaluation.run_case(self.case, "baseline", "CandidateTest",
                                          self.cache, "pinned-image")
         self.assertEqual(result["status"], "blocked_package_timeout")
-        self.assertEqual(runner.call_args_list[-1].args[0],
+        self.assertEqual(runner.call_args_list[-1][0][0],
                          ["podman", "rm", "-f", "test-container-id"])
 
     def test_test_phase_timeout_keeps_package_evidence(self) -> None:
@@ -183,7 +226,7 @@ class CandidateEvaluationTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked_timeout")
         self.assertEqual(result["package"]["status"], "passed")
         self.assertEqual(result["test"]["status"], "timeout")
-        self.assertEqual(runner.call_args_list[-1].args[0],
+        self.assertEqual(runner.call_args_list[-1][0][0],
                          ["podman", "rm", "-f", "test-container-id"])
 
     def test_modified_fixture_is_rejected_before_execution(self):
@@ -204,6 +247,91 @@ class CandidateEvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs from pinned"):
             evaluation.evaluate(args)
         self.assertFalse(args.output_root.exists())
+
+
+    def test_generated_test_metrics_count_bytes_and_lines(self):
+        source = self.root / "GeneratedTest.java"
+        source.write_text("class A {\n\n  // check\n}\n")
+        metrics = evaluation.generated_test_metrics(source)
+        self.assertEqual(metrics["bytes"], source.stat().st_size)
+        self.assertEqual(metrics["physical_lines"], 4)
+        self.assertEqual(metrics["nonblank_lines"], 3)
+        self.assertEqual(metrics["sha256"], evaluation.sha256(source.read_bytes()))
+
+    def test_missing_jacoco_is_unknown_not_zero(self):
+        measured = evaluation.spring_transfer_coverage(self.case)
+        self.assertEqual(measured["status"], "coverage_unknown")
+        self.assertEqual(measured["reason"], "jacoco_report_missing")
+
+    def test_malformed_jacoco_is_unknown_not_zero(self):
+        report = self.case / "target/site/jacoco/jacoco.xml"
+        report.parent.mkdir(parents=True)
+        report.write_text("<broken")
+        measured = evaluation.spring_transfer_coverage(self.case)
+        self.assertEqual(measured["status"], "coverage_unknown")
+        self.assertEqual(measured["reason"], "jacoco_report_invalid")
+
+    def test_spring_transfer_jacoco_method_counters(self):
+        report = self.case / "target/site/jacoco/jacoco.xml"
+        report.parent.mkdir(parents=True)
+        report.write_text("""<report><package name="com/redhat/lightwell/service">
+            <class name="com/redhat/lightwell/service/TransactionService">
+            <method name="transfer" desc="(LRequest;)LResponse;">
+            <counter type="LINE" missed="0" covered="31"/>
+            <counter type="BRANCH" missed="1" covered="5"/>
+            </method></class></package></report>""")
+        measured = evaluation.spring_transfer_coverage(self.case)
+        self.assertEqual(measured["status"], "measured")
+        self.assertEqual(measured["line"], {"missed": 0, "covered": 31})
+        self.assertEqual(measured["branch"], {"missed": 1, "covered": 5})
+
+    def test_oversized_jacoco_report_is_unknown(self):
+        report = self.case / "target/site/jacoco/jacoco.xml"
+        report.parent.mkdir(parents=True)
+        with report.open("wb") as output:
+            output.truncate(evaluation.MAX_LOG_BYTES + 1)
+        measured = evaluation.spring_transfer_coverage(self.case)
+        self.assertEqual(measured["status"], "coverage_unknown")
+        self.assertEqual(measured["reason"], "jacoco_report_oversized")
+
+    def test_linked_jacoco_report_is_unknown(self):
+        actual = self.root / "real.xml"
+        actual.write_text("<report/>")
+        report = self.case / "target/site/jacoco/jacoco.xml"
+        report.parent.mkdir(parents=True)
+        report.symlink_to(actual)
+        measured = evaluation.spring_transfer_coverage(self.case)
+        self.assertEqual(measured["status"], "coverage_unknown")
+        self.assertEqual(measured["reason"], "jacoco_report_linked")
+
+    def test_coverage_comparison_uses_fresh_fixture_copies(self):
+        fixture = self.root / "fixture"
+        fixture.mkdir()
+        (fixture / "pom.xml").write_text("trusted pom")
+        candidate = self.root / "CandidateTest.java"
+        candidate.write_text("class CandidateTest {}")
+        target = pathlib.Path("src/test/java/CandidateTest.java")
+        (self.case / "pom.xml").write_text("poisoned pom from earlier run")
+        with patch.object(evaluation, "_run_maven_phase",
+                          return_value={"status": "failed"}) as runner:
+            result = evaluation.spring_coverage_comparison(
+                fixture, candidate, target, self.root, self.cache, "pinned-image",
+                evaluation.get_profile("spring-transfer"))
+        self.assertEqual(result["status"], "coverage_unknown")
+        copied = self.root / "coverage-candidate"
+        self.assertEqual((copied / "pom.xml").read_text(), "trusted pom")
+        self.assertEqual((copied / target).read_text(), "class CandidateTest {}")
+        self.assertEqual(runner.call_args_list[1][0][0], copied)
+        self.assertEqual((self.case / "pom.xml").read_text(),
+                         "poisoned pom from earlier run")
+
+    def test_maven_phase_has_monotonic_duration(self):
+        with patch.object(evaluation.subprocess, "run", return_value=self.fake_run(0)):
+            phase = evaluation._run_maven_phase(self.case, "baseline", "package",
+                                                self.cache, "pinned-image", "CandidateTest")
+        self.assertIsInstance(phase["elapsed_ms"], int)
+        self.assertGreaterEqual(phase["elapsed_ms"], 0)
+
 
 
 if __name__ == "__main__":
