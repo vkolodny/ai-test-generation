@@ -22,35 +22,37 @@ These are controlled behavior experiments, not proof of a CVE fix or production 
 
 ## Pin and check a run
 
-[run-spec.example.json](run-spec.example.json) defines `flpath-5050.run-spec.v1`: profile, ordered candidates, one model and endpoint, stage time limits, and optional external adapters. Make one reviewed copy per profile. Pass it with `--run-spec`; do not combine that option with `--candidate`. The runner saves its hash, run ID, candidate order, stage checkpoints, tool versions, runner hash, and evaluator hash.
+[run-spec.quarkus-staged.json](run-spec.quarkus-staged.json) and [run-spec.spring-xml-deposit.json](run-spec.spring-xml-deposit.json) select the two staged tasks and define `flpath-5050.run-spec.v1`: profile, ordered candidates, one model and endpoint, stage time limits, and optional external adapters. Use the same reviewed spec for each comparable repeat. Pass it with `--run-spec`; do not combine that option with `--candidate`. The runner saves its hash, run ID, candidate order, stage checkpoints, tool versions, runner hash, and evaluator hash.
 
-Before a live call, run `run_comparison.py --check-only` with the same fixture, Maven cache, runtime paths, output path, and run specification that the live call will use. The key-free preflight must complete successfully. The preflight runs the pinned fixture's Maven `verify` with network disabled and the chosen cache. In particular, the Spring Maven cache does not contain the Quarkus 3.40.1 plugin and BOM. Use the verified Quarkus cache for `quarkus-staged`.
+Before a live call, run `run_comparison.py --check-only` with the same fixture, Maven cache, runtime paths, output path, and run specification that the live call will use. The key-free preflight must complete successfully. The preflight runs the pinned fixture's Maven `verify` with network disabled and the chosen cache. Use separate warmed Spring and Quarkus caches, and verify the selected fixture against its own cache; one cache may not contain the other fixture's dependencies.
 
 Keep each run on a bounded temporary volume. Stream the model key through standard input as described in [RERUN.md](RERUN.md); do not put it in a command argument or repository file. Start every attempt with a new output directory. Treat an aborted or missing-summary run as a setup-invalid pilot, not a candidate failure or a comparable repeat. Record the cause separately and rerun only after the offline build check passes.
 
 ## Archive and report
 
-Wait until the run has finished. Confirm `summary.json` says `"evidence_scan": "passed"`. The exporter enforces this gate and refuses an incomplete run. On `sealusa35`:
+Wait until the run has finished. Confirm `summary.json` says `"evidence_scan": "passed"`. The exporter enforces this gate and refuses an incomplete run. On the experiment host, use the variables prepared in the runbook and choose a new archive name:
 
 ```sh
-ATG_ROOT=/root/tmp/flpath-5050-spring-001/ai-test-generation
-RUN=/root/tmp/flpath-5050-spring-001/quota-output/quarkus-staged-run-002
-ARCHIVE=/root/tmp/flpath-5050-spring-001/evidence-selected/quarkus-staged-run-002
-mkdir -p /root/tmp/flpath-5050-spring-001/evidence-selected
+: "${ATG_ROOT:?Set ATG_ROOT to the repository checkout}"
+: "${WORK_ROOT:?Set WORK_ROOT to the experiment workspace}"
+: "${RUN_OUTPUT:?Set RUN_OUTPUT to a completed run}"
+ARCHIVE_ROOT="$WORK_ROOT/evidence"
+ARCHIVE="$ARCHIVE_ROOT/run-001"
+mkdir -p "$ARCHIVE_ROOT"
 python3 "$ATG_ROOT/experiments/harness/archive_evidence.py" \
-  --run-root "$RUN" \
+  --run-root "$RUN_OUTPUT" \
   --output-dir "$ARCHIVE"
 ```
 
 Use a **new** archive directory for each attempt. The exporter copies selected JSON, logs, checkpoints, the evaluated Java test, and JaCoCo XML; it excludes bulk Maven workspaces. `archive-manifest.json` lists file sizes and SHA-256 hashes. Review the archive before sharing it. Do not archive a run whose scan is blocked or absent.
 
-Build one report from any number of completed archives:
+Build one report from any number of completed archives. The following example assumes the two named archives already exist; replace their names with your completed archives:
 
 ```sh
 python3 "$ATG_ROOT/experiments/harness/build_findings.py" \
-  --run-root /root/tmp/flpath-5050-spring-001/evidence-selected/quarkus-staged-run-002 \
-  --run-root /root/tmp/flpath-5050-spring-001/evidence-selected/spring-xml-deposit-run-001 \
-  --output-dir /root/tmp/flpath-5050-spring-001/findings-multitask-001
+  --run-root "$ARCHIVE_ROOT/quarkus-staged-run-001" \
+  --run-root "$ARCHIVE_ROOT/spring-xml-deposit-run-001" \
+  --output-dir "$WORK_ROOT/findings-multitask-001"
 ```
 
 The new report directory contains `findings.json` for tools and `findings.md` for reviewers. Pass `--run-root` again for every complete attempt, including candidate failures or timeouts. The report checks saved evidence integrity and separates runs by fixture, objective, model, endpoint, runner, and evaluator identity. It compares each candidate's invocation configuration and tool identity before reporting median time. **Do not** average across tasks or changed configurations. The historical Spring runs changed runner or prompt settings, so they are separate cohorts, not reliability repeats. Older packets may have unknown JaCoCo or Maven timings; rebuilding the report cannot invent missing measurements.
@@ -73,7 +75,7 @@ To add a candidate, build and review an approved container with executable `/ada
 
 The adapter receives the same objective and source context. It must follow the Analyze, Plan, and Code output contract and identify the generated test by path and hash. Hash-linked stage checkpoints preserve completed-stage evidence after a later failure. They do not resume a run.
 
-The [fake external adapter](fixtures/fake_external_adapter/) was exercised without a model using a fake key. One setup failure and one successful contract run are retained at `/root/tmp/flpath-5050-spring-001/fake-external-evidence-2026-11-19`. The successful fake test passed on original Spring code and failed by assertion on the defect. This validates the extension contract, not a real candidate or a secure adapter image. A real external container receives the model key and network access; review its image before use. An image digest identifies the bits but does not establish trust.
+The [fake external adapter](fixtures/fake_external_adapter/) was exercised without a model using a fake key. One setup failure and one successful contract run were retained outside the repository on the original experiment host. The successful fake test passed on original Spring code and failed by assertion on the defect. This validates the extension contract, not a real candidate or a secure adapter image. A real external container receives the model key and network access; review its image before use. An image digest identifies the bits but does not establish trust.
 
 ## Record a review decision
 
@@ -104,10 +106,11 @@ Without a review file, the report marks each candidate and stage `insufficient_e
 Every included candidate needs a unique decision ID, an authorization reference, a reason, and all four stage decisions. The reviewer needs an identity and role. `use_with_fork` also requires a nonempty `required_changes` list. Positive decisions require completed generation and a passed evidence scan. The report records the review file hash.
 
 ```sh
+: "${REVIEW_FILE:?Set REVIEW_FILE to your reviewed decision JSON}"
 python3 "$ATG_ROOT/experiments/harness/build_findings.py" \
   --run-root "$ARCHIVE" \
-  --decision-review /root/tmp/flpath-5050-spring-001/decision-review.json \
-  --output-dir /root/tmp/flpath-5050-spring-001/findings-reviewed-001
+  --decision-review "$REVIEW_FILE" \
+  --output-dir "$WORK_ROOT/findings-reviewed-001"
 ```
 
 Evaluate candidate use by stage and overall: semantic correctness, repeatability across behaviors, generated-code maintenance, licensing and fork rights, model endpoint support, isolation, and measured time. `Execute` is the shared evaluator today, not a fourth generation agent. A single timeout or success does not settle production suitability. A dirty checkout also needs a reviewed source snapshot or commit before another person can reproduce it.

@@ -1,111 +1,97 @@
-# FLPATH-5050: Spring transfer comparison
+# FLPATH-5050: repeat the Spring Boot comparison
 
-This is a **second fixture** for the four-candidate experiment. It uses the
-Spring Boot application linked from FLPATH-5000 at commit
-`01a18a1b40e151ffcc1d7bef86bf335f87999750`. It does not run the
-`ssc-demo` pipeline or deploy the application.
+This guide runs all four candidates against the pinned Spring Boot
+lowercase-deposit task using the `spring-xml-deposit` profile. It does not
+deploy the application or run the SSC demo pipeline. For the Quarkus task,
+use [RERUN.md](RERUN.md).
 
-This guide records the `spring-transfer` experiment on `sealusa35`.
-Its paths and credential location are examples from that host and operator.
-Use paths and an approved secret source for your environment. Record the ATG
-checkout revision, dirty state, and runner hash; a dirty checkout needs a saved
-source snapshot for reproduction. See [FINDINGS.md](FINDINGS.md) for the separate
-`spring-xml-deposit` profile and current reporting workflow.
+Run on a Linux experiment host you choose. The current runner requires root
+for Aider and the example mount below. It also requires Podman, Git, Python
+3.11, npm, network access for setup and model generation, a private EnMaaS
+credential, and a dedicated output mount of at most 8 GiB. Tests execute
+offline with a read-only Maven cache.
 
-## 1. Confirm the application baseline
+The runner pins image IDs, candidate versions, the EnMaaS endpoint, and model
+`rits/zai-org/glm-5-3`. Image tags may change; stop if preflight rejects an
+ID. Changing pinned identities requires a reviewed configuration and a new
+comparison cohort.
 
-The pinned app is at
-`/root/tmp/flpath-5050-spring-001/spring-boot-example-application`.
-It uses Spring Boot 2.7.18 and Java 17. The Maven image is
-`docker.io/library/maven:3.9.11-eclipse-temurin-17`, image ID
-`bbb7e05a6487b189e3dc833b6360b4f9eaf0154299fb4e67e764cad5cca33800`.
-The dependency cache is
-`/root/tmp/flpath-5050-spring-001/maven-cache/repository`.
+## 1. Prepare the pinned app and paths
 
-On `sealusa35`, online `mvn -B -ntp verify` passed **121 tests, 0 failures,
-0 errors, 0 skipped**. Offline `mvn -o -B -ntp verify` passed with network
-disabled and the cache mounted read-only. Logs:
-`/root/tmp/flpath-5050-spring-001/baseline-verify.log` and
-`baseline-offline-verify.log`. The repository instructions mention a
-`settings.xml` absent at this commit; the verified commands did not need it.
-Always repeat the offline build before model calls.
-
-Run these commands **on sealusa35**:
+Start in a reviewed checkout of this repository on the experiment host.
+`WORK_ROOT` can be set to any writable location outside the checkout before
+running these commands:
 
 ```sh
-REPRO_ROOT=/root/tmp/flpath-5050-spring-001
-ATG_ROOT="$REPRO_ROOT/ai-test-generation"
-APP_ROOT="$REPRO_ROOT/spring-boot-example-application"
-MAVEN_CACHE="$REPRO_ROOT/maven-cache/repository"
-RUNTIME_ROOT=/root/tmp/flpath-5050-item1-clean-001/runtimes
-RUN_VOLUME="$REPRO_ROOT/quota-output"
-RUN_OUTPUT="$RUN_VOLUME/run-001"
+set -eu
+ATG_ROOT="$(git rev-parse --show-toplevel)"
+WORK_ROOT="${WORK_ROOT:-$HOME/flpath-5050-work}"
+APP_ROOT="$WORK_ROOT/spring-boot-example-application"
+RUNTIME_ROOT="$WORK_ROOT/runtimes"
+MAVEN_CACHE="$WORK_ROOT/maven-cache-spring/repository"
+RUN_VOLUME="$WORK_ROOT/quota-output"
+RUN_OUTPUT="$RUN_VOLUME/spring-xml-deposit-run-001"
+ARCHIVE_ROOT="$WORK_ROOT/evidence"
+RUN_SPEC="$ATG_ROOT/experiments/harness/run-spec.spring-xml-deposit.json"
+mkdir -p "$WORK_ROOT" "$RUNTIME_ROOT" "$MAVEN_CACHE" "$ARCHIVE_ROOT"
+git clone https://github.com/lzspangler/spring-boot-example-application.git "$APP_ROOT"
+git -C "$APP_ROOT" checkout --detach 01a18a1b40e151ffcc1d7bef86bf335f87999750
+git -C "$ATG_ROOT" rev-parse HEAD
 git -C "$APP_ROOT" rev-parse HEAD
-podman image inspect --format '{{.Id}}' \
-  docker.io/library/maven:3.9.11-eclipse-temurin-17
-podman run --rm --pull=never --network=none \
+```
+
+If the app checkout already exists, verify its revision and clean source tree
+instead of cloning again. The app uses Java 17 and Spring Boot 2.7.18. Record
+the ATG revision and dirty state; preserve a source snapshot for any dirty
+checkout. Preflight checks the fixture tree hash and objective hash.
+
+## 2. Prepare images, runtimes, and the offline cache
+
+```sh
+podman pull docker.io/library/python:3.11-slim
+podman pull docker.io/library/maven:3.9.11-eclipse-temurin-17
+podman pull quay.io/sscdemo/ai-agent-maven-aider:v1.0.1
+podman run --rm --pull=never --network=host \
+  -v "$ATG_ROOT:/repo:ro,Z" \
+  -v "$RUNTIME_ROOT:/runtimes:Z" \
+  docker.io/library/python:3.11-slim \
+  sh -c 'python -m venv /runtimes/pydantic-venv &&
+    /runtimes/pydantic-venv/bin/pip install -r /repo/experiments/harness/candidates/pydantic_ai/requirements.txt &&
+    python -m venv /runtimes/langgraph-venv &&
+    /runtimes/langgraph-venv/bin/pip install -r /repo/experiments/harness/candidates/langgraph/requirements.txt'
+npm install --prefix "$RUNTIME_ROOT/claude" --no-audit --no-fund \
+  node@22.23.5 @anthropic-ai/claude-code@2.1.296
+```
+
+Use a **separate Spring cache**; the Quarkus and Spring dependencies differ.
+Warm the pinned app online. The runner later verifies the app offline with
+the cache read-only, before it reads the model key:
+
+```sh
+podman run --rm --pull=never --network=host \
   -v "$APP_ROOT:/workspace:Z" \
-  -v "$MAVEN_CACHE:/root/.m2/repository:ro,Z" \
-  -w /workspace \
-  docker.io/library/maven:3.9.11-eclipse-temurin-17 \
-  mvn -o -B -ntp verify
+  -v "$MAVEN_CACHE:/root/.m2/repository:Z" \
+  -w /workspace docker.io/library/maven:3.9.11-eclipse-temurin-17 \
+  mvn -B -ntp verify
 ```
 
-## 2. Check the controls
+The original experiment's baseline had 121 passing tests. Treat your own
+offline preflight result as the evidence for your setup; do not assume a
+historical result proves the current cache works.
 
-The controlled defect changes **only** the `transfer` balance guard in
-`TransactionService.java` from `< 0` to `<= 0`. The separate mutant checkout
-at `$REPRO_ROOT/spring-transfer-mutant-control` passed the existing **121
-tests**. The reference `SpringTransferExactBalanceReferenceTest.java` passed
-on the original app and failed by assertion on the mutant. The evaluator's
-manual reference packet is
-`$REPRO_ROOT/reference-evaluation-control/evaluation.json`; it reports
-`discriminates`. Logs are `mutant-control-verify.log`,
-`reference-baseline-test.log`, and `reference-mutant-test.log` under
-`$REPRO_ROOT`. These controls are not candidate results. Do not give the
-reference test or mutant source to candidates. To repeat them with the warmed
-cache, use a new evaluator output path:
+## 3. Set up bounded output and run preflight
+
+Mount a dedicated 4 GiB temporary filesystem on the experiment host. Obtain
+any authorization your environment requires. The parent of `RUN_OUTPUT`
+must be a mount no larger than 8 GiB:
 
 ```sh
-podman run --rm --pull=never --network=none \
-  -v "$REPRO_ROOT/spring-transfer-mutant-control:/workspace:Z" \
-  -v "$MAVEN_CACHE:/root/.m2/repository:ro,Z" \
-  -w /workspace \
-  docker.io/library/maven:3.9.11-eclipse-temurin-17 \
-  mvn -o -B -ntp verify
-python3 "$ATG_ROOT/experiments/harness/candidate_evaluation.py" \
-  --profile spring-transfer \
-  --candidate-test-file "$ATG_ROOT/experiments/harness/fixtures/SpringTransferExactBalanceReferenceTest.java" \
-  --candidate-test-path src/test/java/com/redhat/lightwell/service/SpringTransferExactBalanceReferenceTest.java \
-  --candidate manual-reference \
-  --tool-version 1 \
-  --model-id none \
-  --endpoint-id none \
-  --invocation-record "$ATG_ROOT/experiments/harness/fixtures/spring-reference-invocation.json" \
-  --fixture-root "$APP_ROOT" \
-  --maven-cache "$MAVEN_CACHE" \
-  --output-root "$REPRO_ROOT/reference-evaluation-repeat-001"
-```
-
-## 3. Preflight the staged run
-
-The runner supplies the same pinned context, objective, model, and output
-rules to Aider, Pydantic AI, Claude Code, and LangGraph. It records
-`prepare.json` with source, build, tool, and context identities. Each
-candidate must save `analysis.json` and `plan.json` **before** creating a new
-JUnit test. The shared evaluator then runs the test on the original app and
-hidden mutant with network disabled.
-
-Use the pinned Python and Claude runtimes under `$RUNTIME_ROOT`. If absent,
-follow [RERUN.md](RERUN.md) to install them. The live output must be a new
-path on a dedicated size-limited volume. After approval for a mount, run:
-
-```sh
+free -h
 mkdir -p "$RUN_VOLUME"
 mount -t tmpfs -o size=4G,mode=0700 tmpfs "$RUN_VOLUME"
 df -h "$RUN_VOLUME"
 python3 "$ATG_ROOT/experiments/harness/run_comparison.py" \
-  --profile spring-transfer \
+  --run-spec "$RUN_SPEC" \
   --fixture-root "$APP_ROOT" \
   --maven-cache "$MAVEN_CACHE" \
   --output-root "$RUN_OUTPUT" \
@@ -115,60 +101,76 @@ python3 "$ATG_ROOT/experiments/harness/run_comparison.py" \
   --check-only
 ```
 
-`--check-only` uses no EnMaaS key and makes no model call. Stop if the exact
-fixture, objective, image, runtime, or output-root checks fail. The runner
-will not overwrite an existing attempt; use `run-002` for a repeat.
+The key-free preflight checks the spec, pinned content, image IDs, runtimes,
+and unused output path. It also runs the app's existing tests with offline Maven
+and the cache read-only. Resolve any failure before a model call.
 
-## 4. Run all four candidates
+The versioned spec sets `spring-xml-deposit`, the same four candidates, and
+600/600/600/3900-second Analyze/Plan/Code/Execute limits. Keep the spec,
+candidate order, model, runner, evaluator, source and runtime identities fixed
+for comparable repeats. Keep each completed failure and timeout.
 
-After preflight passes, set `ENMAAS_KEY_FILE` on your local machine to
-the path of your private key file. Replace the example path before running:
+## 4. Run all candidates
 
-```sh
-ENMAAS_KEY_FILE=/path/to/your/private/enmaas-key
-```
-
-Run the command below on that machine. The key is streamed over SSH standard
-input; it is not a command argument or a file in the checkout. Do not paste it
-into chat or save unreviewed terminal output. This run makes model calls and
-can take several minutes.
+Set `ENMAAS_KEY_FILE` in the host shell to your approved private credential
+file. It is read through standard input; do not place the key in the repository
+or a command argument. If it resides elsewhere, stream it securely to the
+experiment host's standard input.
 
 ```sh
-ssh -T sealusa35 '
-python3 /root/tmp/flpath-5050-spring-001/ai-test-generation/experiments/harness/run_comparison.py \
-  --profile spring-transfer \
-  --fixture-root /root/tmp/flpath-5050-spring-001/spring-boot-example-application \
-  --maven-cache /root/tmp/flpath-5050-spring-001/maven-cache/repository \
-  --output-root /root/tmp/flpath-5050-spring-001/quota-output/run-001 \
-  --pydantic-venv /root/tmp/flpath-5050-item1-clean-001/runtimes/pydantic-venv \
-  --langgraph-venv /root/tmp/flpath-5050-item1-clean-001/runtimes/langgraph-venv \
-  --claude-runtime-dir /root/tmp/flpath-5050-item1-clean-001/runtimes/claude/node_modules \
-  --api-key-stdin
-' < "$ENMAAS_KEY_FILE"
+: "${ENMAAS_KEY_FILE:?Set ENMAAS_KEY_FILE to your private key file}"
+set +e
+python3 "$ATG_ROOT/experiments/harness/run_comparison.py" \
+  --run-spec "$RUN_SPEC" \
+  --fixture-root "$APP_ROOT" \
+  --maven-cache "$MAVEN_CACHE" \
+  --output-root "$RUN_OUTPUT" \
+  --pydantic-venv "$RUNTIME_ROOT/pydantic-venv" \
+  --langgraph-venv "$RUNTIME_ROOT/langgraph-venv" \
+  --claude-runtime-dir "$RUNTIME_ROOT/claude/node_modules" \
+  --api-key-stdin < "$ENMAAS_KEY_FILE"
+RUN_EXIT=$?
+set -e
+printf 'Runner exit: %s\n' "$RUN_EXIT"
 ```
 
-If the command exits with an error, retain that attempt for review. Do not
-call a setup failure a candidate failure. Use a fresh output path for any
-repeat; never overwrite `run-001`.
+Analyze and Plan produce checkpoints before Code creates a native JUnit test.
+The shared evaluator installs that test in two fresh copies: original code
+must pass and a copy with the seeded case-sensitive deposit defect must fail
+by assertion. A build failure or timeout is blocked or inconclusive, not a
+passing test. A nonzero runner exit still needs evidence review.
 
-## 5. Review evidence
+For a repeat, choose a fresh `RUN_OUTPUT` directory beneath the same mounted
+`RUN_VOLUME`. Never overwrite an attempt.
 
-Inspect `run-001/summary.json`, `prepare.json`, and each candidate folder:
+## 5. Archive and review
 
-1. `analysis.json` identifies the transfer method, existing coverage,
-   exact-balance gap, and feasibility. A missing or unsupported analysis is a
-   stage gap even if later code happens to pass.
-2. `plan.json` names the test path, setup, expected balances, and limits. It
-   must be saved before generation.
-3. The generated Java test changes no production or existing test file.
-4. `evaluation/evaluation.json` reports baseline pass and mutant assertion
-   failure. A setup failure or unavailable environment is **inconclusive**.
+After completion, check `summary.json` contains
+`"evidence_scan": "passed"`. The scan checks the exact key; it cannot detect
+partial or transformed secrets. Review selected evidence before sharing it.
+The exporter refuses missing or blocked scans and writes outside the mount:
 
-Require `"evidence_scan": "passed"` before copying output. The exact-key
-scan blocks on a credential match, symlink, nonregular file, or read error;
-it cannot detect partial or transformed credentials. Review selected files,
-copy only redacted commands/configuration, stage JSON, generated tests, and
-evaluator reports/logs to private scratch, then unmount the temporary volume.
-Do not publish a blocked or unreviewed packet.
+```sh
+ARCHIVE="$ARCHIVE_ROOT/spring-xml-deposit-run-001"
+python3 "$ATG_ROOT/experiments/harness/archive_evidence.py" \
+  --run-root "$RUN_OUTPUT" --output-dir "$ARCHIVE"
+python3 "$ATG_ROOT/experiments/harness/build_findings.py" \
+  --run-root "$ARCHIVE" --output-dir "$WORK_ROOT/findings-spring-001"
+```
 
-One Spring behavior does not rank the tools or prove a CVE fix.
+Use [FINDINGS.md](FINDINGS.md) to compare archives and record a reviewed
+decision. Preserve all completed attempts before unmounting; tmpfs contents
+are lost on unmount:
+
+```sh
+umount "$RUN_VOLUME"
+```
+
+The Spring evaluator measures JaCoCo line and branch coverage for
+`StatementImportService.parseAndCreateTransactions` before and after adding
+the generated test. More coverage does not guarantee a useful assertion. The
+controlled defect does not prove a CVE fix.
+
+For the separate exact-balance task, use the existing
+[run-spec.example.json](run-spec.example.json), which selects
+`spring-transfer`. Keep its results in a different cohort from the XML task.

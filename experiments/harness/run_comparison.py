@@ -1,4 +1,4 @@
-"""Repeat the FLPATH-5050 four-candidate experiment on sealusa35.
+"""Repeat the FLPATH-5050 four-candidate experiment on a Linux host.
 
 Use --check-only before a live run. The live run reads one EnMaaS key from stdin.
 All runtime paths are explicit; this script never installs tools or downloads images.
@@ -261,7 +261,7 @@ def preflight(args: argparse.Namespace, candidates: List[str]) -> Dict[str, str]
     versions = {}
     if "aider" in candidates:
         if os.geteuid() != 0 or image_id(AIDER_IMAGE) != AIDER_IMAGE_ID:
-            raise ValueError("Aider requires root on sealusa35 and the pinned image")
+            raise ValueError("Aider requires root and the pinned image")
         command = ["podman", "run", "--rm", "--pull=never", "--network=none",
                    AIDER_IMAGE, "aider", "--version"]
         if VERSIONS["aider"] not in subprocess.check_output(command, universal_newlines=True):

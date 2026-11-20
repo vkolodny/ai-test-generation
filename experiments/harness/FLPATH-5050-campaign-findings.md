@@ -6,11 +6,13 @@
 
 Four candidate tools ran with the same EnMaaS endpoint and `rits/zai-org/glm-5-3` model. They were asked to Analyze → Plan → Code a Java test. The shared offline evaluator ran each saved test on the original app and on a copy with one hidden defect. A test `discriminates` only when it passes on the original and fails **by assertion** on the defective copy.
 
-- Final machine and review reports on the experiment host: `/root/tmp/flpath-5050-spring-001/findings-final-aider-diagnostic-001/`. The original two-task report remains at `/root/tmp/flpath-5050-spring-001/findings-two-tasks-001/`.
-- The reports and run archives below are **host-local**. They are not part of this repository; their paths require access to sealusa35.
-- Quarkus archive: `/root/tmp/flpath-5050-spring-001/evidence-campaign/quarkus-staged-run-002/` (run ID `e27ce990-0ae3-41e1-a5b9-24cb84f34868`).
-- Spring XML archive: `/root/tmp/flpath-5050-spring-001/evidence-campaign/spring-xml-deposit-run-001/` (run ID `03d151b0-9e35-4b54-b5df-1cf3d3935b56`).
-- Aider-only Spring diagnostic archive: `/root/tmp/flpath-5050-spring-001/evidence-campaign/aider-spring-diagnostic-run-001/` (run ID `6cc4c96e-7af0-4350-90d2-f3c057b8ed3e`).
+The final machine report, original two-task report, and run archives are
+historical evidence stored on the experiment host; they are not in this
+repository. Use the run ID when requesting an archive:
+
+- Quarkus staged run: `e27ce990-0ae3-41e1-a5b9-24cb84f34868`.
+- Spring XML run: `03d151b0-9e35-4b54-b5df-1cf3d3935b56`.
+- Aider-only Spring diagnostic: `6cc4c96e-7af0-4350-90d2-f3c057b8ed3e`.
 
 All three archived summaries report `evidence_scan: passed`, and each archive has `archive-manifest.json` with hashes for retained files. The original Quarkus and Spring runs share runner and evaluator hashes. The Aider diagnostic keeps the runner hash but changes the run specification and evaluator hash, so it is a **third provenance cohort**, not a fixed-configuration repeat or a reliability estimate. The Quarkus run-001 pilot used an incomplete Maven cache and was stopped as **setup-invalid**; it is excluded.
 
@@ -47,7 +49,7 @@ The original generated tests and each candidate's `evaluation/evaluation.json` a
 
 **QE review of Aider diagnostic:** The 75-line JUnit 5/Mockito test creates a fresh account at 1000.00, imports a lower-case 100.00 deposit, and asserts count 1, balance 1100.00, and captured deposit type, amount, and balance-after. Baseline 1/1 passes; mutant 1/1 fails by assertion at the balance check. Because execution stops at that failure, the mutant run does not independently exercise the later type assertion. QE found no forbidden edit or shortcut. The shorter file mainly omits comments and setup splitting; it has no demonstrated quality advantage.
 
-**Coverage correction:** The original four-tool Spring run and its automated report remain `coverage_unknown` because the configured Spring XML target was `StatementImportService.importStatement`, which has no branch counter. The changed condition is inside `StatementImportService.parseAndCreateTransactions`. The host-local derived coverage metrics at `/root/tmp/flpath-5050-spring-001/spring-xml-method-coverage-derived-002.json` were produced by [`reanalyze_coverage.py`](reanalyze_coverage.py). That tool verified the archived JaCoCo XML hashes against the archive manifest and found **45/45 lines and 25/28 branches before and after** adding each of the three successful tests (delta 0). Aider's original run is `unknown` because it produced no test or JaCoCo XML. Its separate diagnostic used the corrected method target and directly recorded **45/45 lines and 25/28 branches before and after** its test (delta 0). The first run's derivation is provenance-marked saved-XML analysis, **not** an evaluator replay or a change to the raw result. The zero delta does not negate defect detection: the old tests executed the branch without asserting the lower-case behavior.
+**Coverage correction:** The original four-tool Spring run and its automated report remain `coverage_unknown` because the configured Spring XML target was `StatementImportService.importStatement`, which has no branch counter. The changed condition is inside `StatementImportService.parseAndCreateTransactions`. The host-local derived coverage metrics were produced by [`reanalyze_coverage.py`](reanalyze_coverage.py). That tool verified the archived JaCoCo XML hashes against the archive manifest and found **45/45 lines and 25/28 branches before and after** adding each of the three successful tests (delta 0). Aider's original run is `unknown` because it produced no test or JaCoCo XML. Its separate diagnostic used the corrected method target and directly recorded **45/45 lines and 25/28 branches before and after** its test (delta 0). The first run's derivation is provenance-marked saved-XML analysis, **not** an evaluator replay or a change to the raw result. The zero delta does not negate defect detection: the old tests executed the branch without asserting the lower-case behavior.
 
 ## Review and candidate disposition
 

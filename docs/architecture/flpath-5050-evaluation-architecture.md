@@ -8,15 +8,69 @@
 
 The evaluator checks the test a candidate produces. It does not invoke a model, select an implementation, or change the ATG service contracts.
 
-```text
-Pinned Java fixture + shared task
-  → candidate tool and approved model endpoint
-  → generated Java test + redacted invocation record
-  → common evaluator
-       → unchanged fixture: test should pass
-       → fixture with one known defect: test should fail by assertion
-  → evaluation record + human comparison by layer
+## Evaluation flow
+
+The same task, fixture, and model are used for each candidate in this
+experiment. Each candidate analyzes the supplied code, plans a test, and
+generates a Java test. A shared evaluator then runs that test offline.
+
+```mermaid
+flowchart TD
+    subgraph L1["Level 1: Shared task"]
+        Task["Same objective + pinned Java application"]
+    end
+    subgraph L2["Level 2: Candidate"]
+        Candidates["Aider · Pydantic AI · Claude Code · LangGraph adapter"]
+        Stages["Analyze → Plan → Code"]
+        Candidates --> Stages
+    end
+    subgraph L3["Level 3: Model and generated test"]
+        Model["EnMaaS → GLM-5.3 in this experiment"]
+        Test["Saved Java test"]
+    end
+    subgraph L4["Level 4: Shared offline evaluator"]
+        Baseline["Original application: test must PASS"]
+        Mutant["Seeded defect: test must FAIL by assertion"]
+        Coverage["Target-method coverage where available"]
+    end
+    subgraph L5["Level 5: Evidence and review"]
+        Evidence["Sanitized logs + evaluation.json + findings report"]
+        Review["Human review and candidate decision"]
+        Evidence --> Review
+    end
+    Task --> Candidates
+    Stages -->|model request| Model
+    Model -->|response| Stages
+    Stages --> Test
+    Test --> Baseline
+    Test --> Mutant
+    Test --> Coverage
+    Baseline --> Evidence
+    Mutant --> Evidence
+    Coverage --> Evidence
 ```
+
+- **Level 1:** Each candidate receives the same objective and pinned
+  application source. The Quarkus and Spring XML tasks are separate cohorts.
+- **Level 2:** Aider and Claude Code are invoked by the runner. Pydantic AI
+  and LangGraph use adapters. All four use the shared evaluator for Execute.
+- **Level 3:** The current experiment uses one EnMaaS endpoint and model.
+  The saved test is the candidate's output; it is reviewed along with the
+  analysis and plan.
+- **Level 4:** A useful test passes on the original and fails by assertion on
+  the seeded defect. Setup errors, timeouts, and missing tests remain blocked
+  or inconclusive. Spring target-method coverage compares the existing suite
+  with the suite plus the new test; Quarkus coverage is not measured yet.
+- **Level 5:** Saved evidence supports a human decision. A result does not
+  automatically select a tool for production.
+
+A seeded defect checks test sensitivity; it does not prove a CVE fix. Coverage
+shows which code ran, not whether the test checked the correct result. See the
+[Quarkus runbook](../../experiments/harness/RERUN.md),
+[Spring runbook](../../experiments/harness/SPRING_RERUN.md), and
+[findings guide](../../experiments/harness/FINDINGS.md) to run and review a
+comparison.
+
 
 ## Repository file map
 
